@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Vancouver Neighborhoods Map</title>
+    <script src="https://d3js.org/d3.v6.min.js"></script>
+    <style>
+        body {
+            display: flex;
+            margin: 0;
+            font-family: 'Poppins', sans-serif;
+        }
+        .map-container {
+            display: flex;
+            flex-direction: row;
+            padding: 10px;
+        }
+        .map {
+            flex: 1;
+            padding: 10px;
+        }
+        .info {
+            width: 400px;
+            padding: 10px;
+            border-left: 1px solid #ddd;
+            background-color: #f9f9f9;
+        }
+        .path {
+            stroke: #fff;
+            stroke-width: 1;
+            opacity: 0.8;
+        }
+        .debug {
+            stroke: red;
+            stroke-width: 2;
+            fill: none;
+        }
+        .line-chart {
+            margin-top: 20px;
+        }
+        .line {
+            stroke-width: 2;
+            fill: none;
+        }
+        .point {
+            stroke: #fff;
+            stroke-width: 2;
+            fill: #007bff;
+        }
+        .axis path,
+        .axis line {
+            fill: none;
+            shape-rendering: crispEdges;
+        }
+        .axis text {
+            font-size: 12px;
+        }
+        .grid line {
+            stroke: #ddd;
+            stroke-dasharray: 2,2;
+        }
+        .side-title {
+            text-decoration: underline;
+            font-size: 24px;
+            font-weight: 300;
+        }
+        .axis-label {
+            font-size: 12px;
+            font-weight: 300;
+            text-anchor: middle;
+        }
+    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@100;400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="map-container">
+        <div class="map">
+            <svg width="800" height="600"></svg>
+        </div>
+        <div class="info" id="info-box">
+            <p class="side-title">Neighborhood Information</p>
+            <p id="neighborhood-name">Hover over a neighborhood to see details.</p>
+            <p id="bike-lane-count"></p>
+            <p id="aaa-percentage"></p>
+            <div class="line-chart" id="line-chart">
+                <svg width="600" height="400"></svg>
+            </div>
+        </div>
+    </div>
+    <script>
+        // Set up the SVG canvas dimensions
+        const mapWidth = 800;
+        const mapHeight = 600;
+        const chartWidth = 400;
+        const chartHeight = 300;
+
+        // Define margins for the line chart
+        const margin = { top: 20, right: 20, bottom: 50, left: 50 };
+        const chartInnerWidth = chartWidth - margin.left - margin.right;
+        const chartInnerHeight = chartHeight - margin.top - margin.bottom;
+
+        // Create the SVG elements
+        const mapSvg = d3.select("svg")
+            .attr("width", mapWidth)
+            .attr("height", mapHeight);
+
+        const chartSvg = d3.select("#line-chart svg")
+            .attr("width", chartWidth)
+            .attr("height", chartHeight)
+            .append("g")
+            .attr("transform", `translate(${margin.left},${margin.top})`);
+
+        // Define a projection
+        const projection = d3.geoMercator()
+            .center([-123.124, 49.247]) // Center on Vancouver
+            .scale(220000) // Scale it to zoom in
+            .translate([mapWidth / 2, mapHeight / 2]);
+
+        // Define a path generator
+        const path = d3.geoPath()
+            .projection(projection);
+
+        // Declare bikeLaneCounts and yearlyData variables globally
+        let bikeLaneCounts = {};
+        let aaaCounts = {};
+        let yearlyData = {};
+
+        // Define the mouse events
+        let mouseOver = function(event, d) {
+            d3.selectAll("path")
+                .transition()
+                .duration(200)
+                .style("opacity", 0.3);
+            d3.select(this)
+                .transition()
+                .duration(200)
+                .style("opacity", 1);
+
+            // Update the information box
+            const neighborhood = d.properties.name;
+            const count = bikeLaneCounts[neighborhood] || "No data";
+            const aaaCount = aaaCounts[neighborhood] || 0;
+            const percentageAAA = (count > 0) ? (aaaCount / count * 100).toFixed(2) : 0;
+            d3.select("#neighborhood-name").text(neighborhood).style("font-size", "28px");
+            d3.select("#bike-lane-count").text(`Number of street blocks that have a bikeway: ${count}`);
+            d3.select("#aaa-percentage").text(`Percentage of AAA bikeway segments: ${percentageAAA}%`);
+
+            // Update the line chart
+            const data = yearlyData[neighborhood] || [];
+            updateLineChart(data);
+        };
+
+        let mouseLeave = function(d) {
+            d3.selectAll("path")
+                .transition()
+                .duration(200)
+                .style("opacity", 0.8);
+            d3.select(this)
+                .transition()
+                .duration(200)
+                .style("opacity", 0.8);
+
+            // Clear the information box
+            d3.select("#neighborhood-name").text("Hover over a neighborhood to see details.").style("font-size", "16px");
+            d3.select("#bike-lane-count").text("");
+            d3.select("#aaa-percentage").text("");
+
+            // Clear the line chart
+            chartSvg.selectAll("*").remove();
+        };
+
+        function updateLineChart(data) {
+            // Clear existing chart
+            chartSvg.selectAll("*").remove();
+
+            if (data.length === 0) return;
+
+            // Define scales
+            const xScale = d3.scaleLinear()
+                .domain([d3.min(data, d => d.year), d3.max(data, d => d.year)])
+                .range([0, chartInnerWidth]);
+
+            const yScale = d3.scaleLinear()
+                .domain([0, d3.max(data, d => d.count)])
+                .range([chartInnerHeight, 0]);
+
+            // Define line generator
+            const line = d3.line()
+                .x(d => xScale(d.year))
+                .y(d => yScale(d.count));
+
+            // Append grid lines
+            chartSvg.append("g")
+                .attr("class", "grid")
+                .call(d3.axisLeft(yScale)
+                    .tickSize(-chartInnerWidth)
+                    .tickFormat('')
+                );
+
+            chartSvg.append("g")
+                .attr("class", "grid")
+                .attr("transform", `translate(0,${chartInnerHeight})`)
+                .call(d3.axisBottom(xScale)
+                    .tickSize(-chartInnerHeight)
+                    .tickFormat('')
+                );
+
+            // Append the line path
+            chartSvg.append("path")
+                .data([data])
+                .attr("d", line)
+                .attr("class", "line")
+                .attr("stroke", "#007bff");
+
+            // Append points
+            chartSvg.selectAll(".point")
+                .data(data)
+                .enter().append("circle")
+                .attr("class", "point")
+                .attr("cx", d => xScale(d.year))
+                .attr("cy", d => yScale(d.count))
+                .attr("r", 3);
+
+            // Append axes
+            chartSvg.append("g")
+                .attr("transform", `translate(0,${chartInnerHeight})`)
+                .call(d3.axisBottom(xScale).ticks(5).tickFormat(d3.format("d")));
+
+            chartSvg.append("g")
+                .call(d3.axisLeft(yScale));
+
+            // Add axis labels
+            chartSvg.append("text")
+                .attr("class", "axis-label")
+                .attr("text-anchor", "middle")
+                .attr("transform", `translate(${chartInnerWidth / 2},${chartInnerHeight + margin.bottom - 10})`)
+                .text("Year").style("font-weight", "400");
+
+            chartSvg.append("text")
+                .attr("class", "axis-label")
+                .attr("text-anchor", "middle")
+                .attr("transform", `translate(${-margin.left + 15},${chartInnerHeight / 2})rotate(-90)`)
+                .text("Number of Bike Lanes Built").style("font-weight", "400");
+        }
+
+        // Load the GeoJSON data from the file
+        d3.json("local-area-boundary.geojson").then(function(geojson) {
+            // Load the CSV data
+            d3.csv("bike_lanes_count.csv").then(function(data) {
+                // Create a map of neighborhood names to bike lane counts
+                bikeLaneCounts = {};
+                aaaCounts = {};
+                data.forEach(d => {
+                    bikeLaneCounts[d.name] = +d.bike_lane_count;
+                    aaaCounts[d.name] = +d.aaa_total;
+                });
+
+                // Create a map of neighborhood names to yearly data
+                yearlyData = {};
+                data.forEach(d => {
+                    const neighborhood = d.name;
+                    yearlyData[neighborhood] = [];
+                    for (let year in d) {
+                        if (year !== 'name' && year !== 'bike_lane_count' && d[year] > 0) {
+                            yearlyData[neighborhood].push({
+                                year: +year,
+                                count: +d[year]
+                            });
+                        }
+                    }
+                });
+
+                // Add a color scale
+                const colorScale = d3.scaleQuantize()
+                    .domain([0, d3.max(Object.values(bikeLaneCounts))])
+                    .range(d3.schemeBlues[9]); // 9 color shades from D3
+
+                // Append the GeoJSON data to the SVG
+                mapSvg.selectAll("path")
+                    .data(geojson.features)
+                    .enter().append("path")
+                    .attr("d", path)
+                    .attr("class", "path")
+                    .attr("fill", function(d) {
+                        const neighborhood = d.properties.name;
+                        const count = bikeLaneCounts[neighborhood];
+                        return colorScale(count);
+                    })
+                    .on("mouseover", mouseOver)
+                    .on("mouseleave", mouseLeave);
+            }).catch(function(error) {
+                console.error("Error loading the CSV data: ", error);
+            });
+        }).catch(function(error) {
+            console.error("Error loading the GeoJSON data: ", error);
+        });
+    </script>
+</body>
+</html>

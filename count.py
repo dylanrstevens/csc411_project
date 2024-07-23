@@ -21,12 +21,37 @@ bikelanes_with_neigh = gpd.sjoin(bikelanes_gdf, neighborhoods_gdf, how='left', p
 # Print columns to find the correct name
 print(bikelanes_with_neigh.columns)
 
-# Assuming the neighborhood field is named differently, replace 'neighborhood_name' with the correct field name
+# Assuming the neighborhood field is named differently, replace 'name' with the correct field name from the print output
 # Example: if the neighborhood name field is 'name', update accordingly
 neighborhood_field = 'name'  # Replace 'name' with the correct column name from the print output
 
-# Count bike lanes per neighborhood
-count_by_neighborhood = bikelanes_with_neigh.groupby(neighborhood_field).size().reset_index(name='bike_lane_count')
+# Group by neighborhood and year of construction, and count bike lanes
+count_by_neighborhood_year = bikelanes_with_neigh.groupby([neighborhood_field, 'Year of Construction']).size().reset_index(name='bike_lane_count')
+
+# Pivot the table to have years as columns
+pivot_table = count_by_neighborhood_year.pivot_table(
+    index=neighborhood_field, 
+    columns='Year of Construction', 
+    values='bike_lane_count', 
+    fill_value=0
+).reset_index()
+
+# Convert all year columns to integers
+for col in pivot_table.columns:
+    if col != neighborhood_field:
+        pivot_table[col] = pivot_table[col].astype(int)
+
+# Add a total column
+pivot_table['total'] = pivot_table.drop(columns=neighborhood_field).sum(axis=1)
+
+# Group by neighborhood and count AAA bike lanes
+aaa_count = bikelanes_with_neigh[bikelanes_with_neigh['AAA Segment'] == 'YES'].groupby(neighborhood_field).size().reset_index(name='aaa_total')
+
+# Merge the AAA count with the pivot table
+result = pd.merge(pivot_table, aaa_count, on=neighborhood_field, how='left')
+
+# Fill NaN values in aaa_total with 0
+result['aaa_total'] = result['aaa_total'].fillna(0).astype(int)
 
 # Save the result to a new CSV file
-count_by_neighborhood.to_csv('bike_lanes_count_by_neighborhood.csv', index=False)
+result.to_csv('bike_lanes_count_by_neighborhood_year.csv', index=False)
